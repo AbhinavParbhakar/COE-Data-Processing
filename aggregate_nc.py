@@ -4,6 +4,7 @@ import tqdm
 
 STORAGE_DIRECTORY = './Associated Files/NC 2025/'
 LOCATION_FILE_NAME = 'NC - Location Coordinates'
+ROWS_SKIPPED_BEFORE_COLUMNS = 10
 
 def return_lat_long(study_name:str,location_df:pd.DataFrame)->tuple[float,float]:
     """
@@ -40,9 +41,10 @@ def return_lat_long(study_name:str,location_df:pd.DataFrame)->tuple[float,float]
     return location_df.loc[max_jaccard_index,lat_col_name], location_df.loc[max_jaccard_index,long_col_name]
     
 
-def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->dict:
+def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->pd.DataFrame:
     """
-    Given the study_file_path, scrape relevant information and use in tandem with geocode_file_path file to attach lat and long.
+    Given the study_file_path, scrape relevant information and use in tandem with geocode_file_path file to attach lat and long
+    and output dataframe containing count information.
     
     ### Parameters
     1. study_file_path : ``str``
@@ -54,11 +56,31 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->dic
     Nothing outside of this function
 
     ### Returns
-    A ``dict`` with a mapping of column names to values
+    A ``pd.DataFrame`` containing all counts grouped by day for the study.
     """
     
     study_df = pd.read_excel(study_file_path)
+    study_data_df = pd.read_excel(study_file_path,skiprows=ROWS_SKIPPED_BEFORE_COLUMNS)
     locations_df = pd.read_excel(geocode_file_path)
+    
+    information_dict = {}
+    
+    # Get count per day, name of day, and date
+    grouping_col_name = 'Date And Time'
+    count_col_name = 'Count'
+    assert grouping_col_name in study_data_df.columns, ValueError('Column "Date And Time" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS')
+    assert count_col_name in study_data_df.columns, ValueError('Column "Count" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS')
+    
+    # Create a DateTimeIndex so that it can be used for grouping
+    study_data_df = study_data_df[~study_data_df[grouping_col_name].isna()]
+    study_data_df[grouping_col_name] = pd.to_datetime(study_data_df[grouping_col_name])
+    study_data_df = study_data_df.set_index(grouping_col_name)
+    
+    aggregated_counts_series = study_data_df.groupby(pd.Grouper(grouping_col_name,freq='1D'))[count_col_name].count()
+    
+    information_dict['Date'] = aggregated_counts_series.index.strftime('%Y-%m-%d')
+    information_dict['Day of Week'] = aggregated_counts_series.index.day_name()
+    information_dict[count_col_name] = aggregated_counts_series.values
     
     # Get study Name
     study_name_col = study_df.columns[4]
@@ -70,15 +92,18 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->dic
     # Get the latitude and longitude
     latitude, longitude = return_lat_long(study_name=study_name,location_df=locations_df)
     
-    information_dict = {'Name':study_name}
-    information_dict['Latitude'] = latitude
-    information_dict['Longitude'] = longitude
+    # Split the file name to remove the extension and then split by white space to get the last word (representing the direction)
+    direction_name = study_file_path.split('.')[1].split(' ')[-1].upper()
     
+    information_dict['Name'] = [study_name] * len(aggregated_counts_series)
+    information_dict['Latitude'] = [latitude] * len(aggregated_counts_series)
+    information_dict['Longitude'] = [longitude] * len(aggregated_counts_series)
+    information_dict['Direction'] = [direction_name] * len(aggregated_counts_series)
     
-    return information_dict
+    return pd.DataFrame(information_dict)
     
 
-def aggregate_black_cat_files(folder_path:str, location_file_name:str)->pd.DataFrame:
+def aggregate_NC_files(folder_path:str, location_file_name:str)->pd.DataFrame:
     """
     Given the file path to the NC directory, read through every file and scrape up relevant details
     
@@ -114,13 +139,13 @@ def aggregate_black_cat_files(folder_path:str, location_file_name:str)->pd.DataF
         # Delete the location file from list of files representing studies
         file_addresses.pop(location_file_index)
     
-    study_dicts : list[dict] = list()
+    study_dataframes_list : list[pd.DataFrame] = []
     
     for address in tqdm.tqdm(file_addresses):
-        study_dicts.append(scrape_information_per_file(study_file_path=address,geocode_file_path=location_file_address))
+        study_dataframes_list.append(scrape_information_per_file(study_file_path=address,geocode_file_path=location_file_address))
         
-    return pd.DataFrame(data=study_dicts)
+    return pd.concat(study_dataframes_list,ignore_index=True)
 
 if __name__ == "__main__":
-    df = aggregate_black_cat_files(folder_path=STORAGE_DIRECTORY,location_file_name=LOCATION_FILE_NAME)
-    print(df.head())
+    df = aggregate_NC_files(folder_path=STORAGE_DIRECTORY,location_file_name=LOCATION_FILE_NAME)
+    df.to_excel('./Associated Files/NC Aggregate Counts.xlsx',index=False)
