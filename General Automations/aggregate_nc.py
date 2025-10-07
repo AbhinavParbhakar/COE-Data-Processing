@@ -68,8 +68,8 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->pd.
     # Get count per day, name of day, and date
     grouping_col_name = 'Date And Time'
     count_col_name = 'Count'
-    assert grouping_col_name in study_data_df.columns, ValueError('Column "Date And Time" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS')
-    assert count_col_name in study_data_df.columns, ValueError('Column "Count" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS')
+    assert grouping_col_name in study_data_df.columns, 'Column "Date And Time" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS'
+    assert count_col_name in study_data_df.columns, 'Column "Count" not found in study. Check the value assigned for ROWS_SKIPPED_BEFORE_COLUMNS'
     
     # Create a DateTimeIndex so that it can be used for grouping
     study_data_df = study_data_df[~study_data_df[grouping_col_name].isna()]
@@ -78,7 +78,7 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->pd.
     
     aggregated_counts_series = study_data_df.groupby(pd.Grouper(grouping_col_name,freq='1D'))[count_col_name].count()
     
-    information_dict['Date'] = aggregated_counts_series.index.strftime('%Y-%m-%d')
+    information_dict['Date'] = aggregated_counts_series.strftime('%Y-%m-%d')
     information_dict['Day of Week'] = aggregated_counts_series.index.day_name()
     information_dict[count_col_name] = aggregated_counts_series.values
     
