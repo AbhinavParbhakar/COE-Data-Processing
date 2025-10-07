@@ -78,7 +78,7 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->pd.
     
     aggregated_counts_series = study_data_df.groupby(pd.Grouper(grouping_col_name,freq='1D'))[count_col_name].count()
     
-    information_dict['Date'] = aggregated_counts_series.strftime('%Y-%m-%d')
+    information_dict['Date'] = aggregated_counts_series.index.strftime('%Y-%m-%d')
     information_dict['Day of Week'] = aggregated_counts_series.index.day_name()
     information_dict[count_col_name] = aggregated_counts_series.values
     
@@ -86,19 +86,39 @@ def scrape_information_per_file(study_file_path:str, geocode_file_path:str)->pd.
     study_name_col = study_df.columns[4]
     study_label_col = study_df.columns[1]
     study_label_target = 'Street:'
+    
+    assert study_label_target in study_df[study_label_col].unique(), 'Label "Street:" not found in target column.'
     study_name_row_index = study_df[study_name_col][study_df[study_label_col] == study_label_target].index
     study_name : str = study_df.loc[study_name_row_index,study_name_col].tolist()[0]
+    
+    # Get the speed limit
+    speed_limit_col = study_df.columns[8]
+    speed_limit_label_col = study_df.columns[7]
+    speed_limit_label_target = 'Speed Limit:'
+    
+    assert speed_limit_label_target in study_df[speed_limit_label_col].unique(), 'Label "Speed Limit:" not found in target column.'
+    speed_limit_row_index = study_df[speed_limit_col][study_df[speed_limit_label_col] == speed_limit_label_target].index
+    speed_limit : str = study_df.loc[speed_limit_row_index,speed_limit_col].tolist()[0]
     
     # Get the latitude and longitude
     latitude, longitude = return_lat_long(study_name=study_name,location_df=locations_df)
     
-    # Split the file name to remove the extension and then split by white space to get the last word (representing the direction)
-    direction_name = study_file_path.split('.')[1].split(' ')[-1].upper()
+    # Split the file name to remove the extension and then split by white space to get the last word (representing the direction|Lane number)
+    direction_or_lane_number = study_file_path.split('.')[1].split(' ')[-1].upper()
+    
+    if direction_or_lane_number.isnumeric():
+        direction_name = study_file_path.split('.')[1].split(' ')[-2].upper()
+        lane_number = direction_or_lane_number
+    else:
+        direction_name = direction_or_lane_number
+        lane_number = "1"
     
     information_dict['Name'] = [study_name] * len(aggregated_counts_series)
     information_dict['Latitude'] = [latitude] * len(aggregated_counts_series)
     information_dict['Longitude'] = [longitude] * len(aggregated_counts_series)
     information_dict['Direction'] = [direction_name] * len(aggregated_counts_series)
+    information_dict['Speed Limit'] = [speed_limit] * len(aggregated_counts_series)
+    information_dict['Lane Number'] = [lane_number] * len(aggregated_counts_series)
     
     return pd.DataFrame(information_dict)
     
@@ -142,7 +162,7 @@ def aggregate_NC_files(folder_path:str, location_file_name:str)->pd.DataFrame:
     study_dataframes_list : list[pd.DataFrame] = []
     
     for address in tqdm.tqdm(file_addresses):
-        study_dataframes_list.append(scrape_information_per_file(study_file_path=address,geocode_file_path=location_file_address))
+        study_dataframes_list.append(scrape_information_per_file(study_file_path=rf'{address}',geocode_file_path=rf'{location_file_address}'))
         
     return pd.concat(study_dataframes_list,ignore_index=True)
 
