@@ -1,16 +1,17 @@
-from playwright.sync_api import sync_playwright, Playwright, Page
+from playwright.sync_api import sync_playwright, Playwright, Page, BrowserContext
 from dataclasses import dataclass
 from dotenv import dotenv_values
 import logging
 import datetime
 import os
 import time
+from bs4 import BeautifulSoup, Tag
 
 # Gobal Variables
 MAX_AUTH_DEFAULT_NAV_TIMEOUT = 60000 # miliseconds
 MAX_MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT = 90000# milliseconds
 MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT = 240000 #milliseconds
-SCRAPING_START_YEAR = 2021
+SCRAPING_START_YEAR = 2024
 SCRAPING_END_YEAR = 2024
 
 def configure_logging()->logging.Logger:
@@ -28,22 +29,26 @@ def configure_logging()->logging.Logger:
 
 @dataclass
 class ConfigurationDetails:
-    AUTH_FILE_NAME:str
-    AUTH_USERNAME:str
-    AUTH_PASSWORD:str
-    AUTH_LINK:str
-    AUTH_MAX_DEFAULT_NAVIGATION_TIMEOUT:int
-    AUTH_USERNAME_LOCATOR:str
-    AUTH_SUBMIT_USERNAME_BUTTON_LOCATOR:str
-    AUTH_PASSWORD_LOCATOR:str
-    AUTH_SUBMIT_PASSWORD_BUTTON_LOCATOR:str
+    AUTH_FILE_NAME : str
+    AUTH_USERNAME : str
+    AUTH_PASSWORD : str
+    AUTH_LINK : str
+    AUTH_MAX_DEFAULT_NAVIGATION_TIMEOUT : int
+    AUTH_USERNAME_LOCATOR : str
+    AUTH_SUBMIT_USERNAME_BUTTON_LOCATOR : str
+    AUTH_PASSWORD_LOCATOR : str
+    AUTH_SUBMIT_PASSWORD_BUTTON_LOCATOR : str
+    
     SCRAPING_START_YEAR : int
     SCRAPING_END_YEAR : int
+    
     MIOVISION_ID_LOCATOR : str
-    MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT:int
-    MIOVISION_SCREENSHOTS_FOLDER_NAME:str
-    MIOVISION_SCREENSHOT_LOCATOR:str
-    MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT:int
+    MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT : int
+    MIOVISION_SCREENSHOTS_FOLDER_NAME : str
+    MIOVISION_SCREENSHOT_LOCATOR : str
+    MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT : int
+    MIOVISION_GREEN_SYMBOL_LOCATOR : str
+    MIOVISION_SOUND_SYMBOL_LOCATOR : str
 
 def create_auth_credentials(playwright:Playwright, config: ConfigurationDetails,logger:logging.Logger)->None:
     """
@@ -219,6 +224,49 @@ def scrape_miovision_ids(playwright:Playwright,config:ConfigurationDetails,logge
     browser.close()
     return miovision_ids
 
+
+def delete_sound_green_labels(page:Page,context:BrowserContext,config:ConfigurationDetails)->Page:
+    """
+    Given a page, and the configuation details object, delete the sound and green labels and return 
+    a new page object that contains the updated HTML.
+    
+    ### Parameters
+    1. page : ``Page``
+        - References the current automation URL
+    2. config : ``ConfigurationDetails``
+        - Contains locator text for the green and sound labels
+    3. context : ``BrowserContext``
+        - Used to create attach the newly generated page
+
+    ### Returns
+    Updated ``Page`` object containing new HTML content.
+    
+    ### Effects
+    Closes the page that is passed in and opens a new page attached to the context object passed in.
+    """
+        
+    html_content_str = page.content()
+    page.close()
+    
+    
+    temp_file_name = './temp.html'
+    soup = BeautifulSoup(html_content_str,'html.parser')
+    divs = soup.find_all('div[style*="width: 48px;"]')
+    
+    for div in divs:
+        div.decompose()
+    
+    with open(temp_file_name,mode='w',encoding='utf-8') as f:
+        f.write(soup.prettify())
+    
+    absoulte_html_file_path = os.path.abspath(temp_file_name)
+    
+    cleaned_page = context.new_page()
+    cleaned_page.goto(f'file://{absoulte_html_file_path}')
+    
+    return cleaned_page
+    
+
 def scrape_miovision_screenshots(logger:logging.Logger, playwright:Playwright,config:ConfigurationDetails,miovision_ids:list[str])->None:
     """
     Given the list of miovision IDs, visit each webpage, and save a screenshot of the location mapping for each one in local storage. The images
@@ -243,7 +291,7 @@ def scrape_miovision_screenshots(logger:logging.Logger, playwright:Playwright,co
     """
     
     # Configure browser set up
-    browser = playwright.chromium.launch()
+    browser = playwright.chromium.launch(headless=False)
     context = browser.new_context(storage_state=config.AUTH_FILE_NAME)
     context.set_default_navigation_timeout(config.MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT)
     page = context.new_page()
@@ -265,11 +313,11 @@ def scrape_miovision_screenshots(logger:logging.Logger, playwright:Playwright,co
         page.wait_for_load_state()
         
         # Check if the study results in a 404
-        if "404" not in page.url:  
-            page.locator(config.MIOVISION_SCREENSHOT_LOCATOR).click()
-            
+        if "404" not in page.url:       
             logger.info(f"[scrape_miovision_screenshots] Taking screenshot for {miovision_id}")
+            page.locator(config.MIOVISION_SCREENSHOT_LOCATOR).click()
             page.wait_for_load_state()
+            page = delete_sound_green_labels(page,context,config)
             time.sleep(2)
             page.screenshot(path=image_path)
     
@@ -314,6 +362,8 @@ if __name__ == "__main__":
     miovision_id_locator = 'div.miogrey'
     miovision_screenshots_folder_name = "Screenshots"
     miovision_screenshot_locator = 'button.gm-control-active.gm-fullscreen-control'
+    miovision_green_symbol_locator = 'xpath=//div[contains(@style, "width: 48px") and contains(@style, "height: 68px")]'
+    miovision_sound_symbol_locator = 'xpath=//div[(contains(@style, "width: 58px") and contains(@style, "height: 58px")) or (contains(@style, "width: 56px") and contains(@style, "height: 57px"))]'
     
     auth_config = ConfigurationDetails(
         AUTH_FILE_NAME=config['AUTH_FILE_NAME'],
@@ -331,7 +381,9 @@ if __name__ == "__main__":
         MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT=MAX_MIOVISION_ID_MAX_DEFAULT_NAVIGATION_TIMEOUT,
         MIOVISION_SCREENSHOTS_FOLDER_NAME=miovision_screenshots_folder_name,
         MIOVISION_SCREENSHOT_LOCATOR=miovision_screenshot_locator,
-        MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT=MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT
+        MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT=MIOVISION_SCREENSHOT_MAX_LOCATOR_TIMEOUT,
+        MIOVISION_GREEN_SYMBOL_LOCATOR=miovision_green_symbol_locator,
+        MIOVISION_SOUND_SYMBOL_LOCATOR=miovision_sound_symbol_locator
     )
     
     logger = configure_logging()
