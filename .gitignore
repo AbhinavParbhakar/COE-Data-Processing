@@ -198,7 +198,7 @@ cython_debug/
 .ruff_cache/
 
 "Associated Files"/
-
+Screenshots/
 *.txt
 *.xls
 # PyPI configuration file
