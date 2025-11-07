@@ -1,8 +1,15 @@
 import argparse
 from auth_provider import AuthProvider
 from miovision_info_provider import MiovisionInfoProvider
-from report_downloads_provider import DownloadsProvider
+from report_downloads_provider import DownloadsProvider, MiovisionHeadersProvider,APIContentDownloader,JSONSessionAuthProvider, ExcelFileContentSaver, DataDownloadConfig
+from report_downloads_provider import ValidatingDownloader
+from existing_file_validation import LocalStorageExistingFileValidator
 from dataclasses import dataclass
+import dotenv
+from logger_provider import configure_logging
+import os
+from multiprocessing.pool import Pool
+from pathlib import Path
 
 @dataclass
 class CommandLineArguments:
@@ -23,6 +30,12 @@ class CommandLineArguments:
         
         if '.json' not in self.auth_session_file_path:
             raise ValueError("auth_session_file_path must be in the following format '[path].json'")
+        
+
+
+
+def download_file(downloads:ValidatingDownloader):
+    downloads.download_file()
 
 def configure_parser(arguments:list[str])->argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -37,28 +50,36 @@ def configure_parser(arguments:list[str])->argparse.ArgumentParser:
 
 if __name__== '__main__':
     arguments = [
-        'miovision_username',
-        'miovision_password',
         'auth_session_file_path',
         'miovision_base_folder',
         'start_year',
         'end_year',
         'time_interval'
     ]
+    
+    dotenv.load_dotenv()
+    username = os.environ['MIOVISION_USERNAME']
+    password = os.environ['MIOVISION_PASSWORD']
+    
+    if not username or not password:
+        raise Exception('Username and Password must be specified in the .env placed in the root of directory')
+    
     parser = configure_parser(arguments)
     args : dict[str,str] = vars(parser.parse_args())
     
     arguments = CommandLineArguments(
-            miovision_username = args['miovision_username'],
-            miovision_password = args['miovision_password'],
+            miovision_username = username,
+            miovision_password = password,
             auth_session_file_path = args['auth_session_file_path'],
             miovision_base_folder = args['miovision_base_folder'],
             start_year = args['start_year'],
             end_year = args['end_year'],
             time_interval = args['time_interval']
     )
-
     
+    if  not os.path.exists(arguments.miovision_base_folder):
+        os.mkdir(arguments.miovision_base_folder)
+
     auth = AuthProvider(username=arguments.miovision_username,
                         password=arguments.miovision_password,
                         auth_file_name=arguments.auth_session_file_path)
@@ -68,11 +89,35 @@ if __name__== '__main__':
                                            end_year=int(arguments.end_year))
     
     auth.create_authentication_context_session()
-    miovision_info = miovision_info.get_miovision_study_types_ids()
+    miovision_info_list = miovision_info.get_miovision_study_types_ids()
     
-    downloader = DownloadsProvider(auth_context_file_name=arguments.auth_session_file_path,
-                                   folder_path=arguments.miovision_base_folder,
-                                   miovision_studies_types_ids=miovision_info,
-                                   time_interval=arguments.time_interval)
+    download_providers : list[ValidatingDownloader] = []
     
-    downloader.download_files()
+    for study_type, study_id in miovision_info_list:
+        data = DataDownloadConfig(
+            study_id=study_id,
+            study_type=study_type,
+            file_name=Path(arguments.miovision_base_folder) / f'{study_type}-{study_id}.xlsx',
+            time_interval=arguments.time_interval
+        )
+        session_provider = JSONSessionAuthProvider(json_file_name=arguments.auth_session_file_path)
+        headers_provider = MiovisionHeadersProvider(session_provider)
+        content_downloader = APIContentDownloader(headers_provider)
+        content_saver = ExcelFileContentSaver(file_name=data.file_name)
+        existing_file_validator = LocalStorageExistingFileValidator(Path(arguments.miovision_base_folder))
+        
+        download_providers.append(
+            ValidatingDownloader(
+                DownloadsProvider(
+                    content_downloader=content_downloader,
+                    logger=configure_logging('DownloadsProvider'),
+                    content_saver=content_saver,
+                    download_config=data
+                ),
+                existing_file=existing_file_validator,
+                file_path=data.file_name
+            )
+        )
+    
+    with Pool(os.cpu_count()) as p:
+        p.map(download_file,download_providers)
